@@ -49,7 +49,7 @@ verified price PnL (not equity, which voucher credits and deposits would inflate
 ## Deploy (VPS + Semaphore)
 
 bump-backend runs as `bump-backend.service` (Bun, port 7000) next to the other apps on the VPS, behind nginx on its own
-host; the app (fe-bump) is on Vercel and calls it cross-site.
+host (`https://api.paymom3nts.xyz`); the app (fe-bump) is on Vercel and calls it cross-site.
 
 | File | What |
 |---|---|
