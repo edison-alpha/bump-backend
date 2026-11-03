@@ -1,0 +1,19 @@
+[Unit]
+Description=bump backend (Elysia on Bun)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/bump/bump-backend
+EnvironmentFile=/home/ubuntu/bump/bump-backend/.env
+ExecStart=/usr/local/bin/bun src/index.ts
+Restart=always
+RestartSec=5
+# the server is small (about 2 GB) and shared with other apps: keep bump from crowding them out
+MemoryMax=450M
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

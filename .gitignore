@@ -1,0 +1,6 @@
+node_modules/
+.bump-db/
+.env
+.env.local
+
+.claude/settings.local.json
