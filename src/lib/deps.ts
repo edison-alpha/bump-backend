@@ -22,6 +22,8 @@ export type Deps = {
   receipt: (hash: Hex) => Promise<TxReceipt | null>;
   /** dreamDEX perp rows for bump's markets, from the indexer (cached). */
   markets: () => Promise<Record<MarketId, PerpGrid>>;
+  prices: Reader["prices"];
+  candles: Reader["candles"];
   /** Position updates that realized PnL for `account` on `pool` since `fromSec`, from the indexer. */
   closes: (account: Address, pool: string, fromSec: number) => Promise<PositionClose[]>;
   sttBalance: (address: Address) => Promise<bigint>;
@@ -66,6 +68,8 @@ const live: Deps = {
     }
   },
   markets: () => indexer().markets(),
+  prices: () => indexer().prices(),
+  candles: (id, bucket, limit) => indexer().candles(id, bucket, limit),
   closes: (account, pool, fromSec) => indexer().closes(account, pool, fromSec),
   sttBalance: (address) => client().getBalance({ address }),
   safeOwners: async (account) => {

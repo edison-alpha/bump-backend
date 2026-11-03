@@ -33,9 +33,13 @@ Shared code comes from `../bump-packages` through the `@bump/*` path alias in `t
 | GET | `/api/push/key` | – | VAPID public key (null when push is off) |
 | POST / DELETE | `/api/me/push` | ✓ | Save / drop a browser push subscription |
 | GET | `/api/leaderboard?period=&kind=` | – | Net PnL of on-chain trades; a signed-in viewer is always ranked |
+| GET | `/api/prices` | – | Cached dreamDEX testnet marks for all listed perps, with per-market status and observation time |
+| GET | `/api/markets/:id/candles?bucket=60&limit=60` | – | Real trade candles; supported buckets are 60, 300, 900, 3600, 14400 and 86400 seconds; limit 1–120 |
 | POST | `/api/gas/drip` | ✓ | STT from the faucet; one per cooldown, nothing for a funded wallet |
 
 Errors are `{ error, requestId }` with 400 / 401 / 404 / 409 / 429 (`nextAt`) / 503.
+
+Market prices are read by `@bump/dreamdex` and shared for four seconds across callers. A paused feed returns the last verified mark with `status: "stale"` and its original `updatedAt`, or `price: null` and `status: "unavailable"` if no mark has been verified. No simulated or last-fill price is substituted. The 24h percentage uses the hourly trade candle containing the 24h-ago instant and is approximate; missing history returns `null`. Candle requests are cached for 30 seconds and preserve gaps.
 
 ## Trust model
 

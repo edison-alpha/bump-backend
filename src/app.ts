@@ -7,7 +7,7 @@ import { closeTradeSchema, guestImportSchema, limitsSchema, openTradeSchema, pro
 import { db } from "./lib/db/client.ts";
 import { deps } from "./lib/deps.ts";
 import { env } from "./lib/env.ts";
-import { AuthError, classify, InputError } from "./lib/errors.ts";
+import { AuthError, classify, InputError, NotFoundError } from "./lib/errors.ts";
 import { drip } from "./lib/gas.ts";
 import { parse } from "./lib/input.ts";
 import { leaderboard, parseBoard } from "./lib/leaderboard.ts";
@@ -82,6 +82,15 @@ export function createApp() {
           return json({ ok: false, database: "unreachable" }, 503);
         }
       })
+
+      .get("/api/prices", open(async () => deps().prices()))
+      .get("/api/markets/:id/candles", open(async ({ params, query }) => {
+        const bucket = Number(query.bucket ?? 60);
+        const limit = Number(query.limit ?? 60);
+        if (![60, 300, 900, 3600, 14400, 86400].includes(bucket) || !Number.isInteger(limit) || limit < 1 || limit > 120) throw new InputError("Invalid candle range.");
+        if (!params.id || !Object.hasOwn(await deps().markets(), params.id)) throw new NotFoundError("Unknown dreamDEX market.");
+        return deps().candles(params.id, bucket, limit);
+      }))
 
       // Session --------------------------------------------------------------------------------------------------------
       .post("/api/session", async (ctx) => {
