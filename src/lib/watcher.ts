@@ -4,7 +4,7 @@ import { round2, signedUsdText } from "./format.ts";
 import { deps } from "./deps.ts";
 import { log } from "./log.ts";
 import { notify } from "./push.ts";
-import { autoReason, closedTxs, marketFor, openChainTrades, recordClose, type TradeRow } from "./trades.ts";
+import { accountOfTrade, autoReason, closedTxs, marketFor, openChainTrades, recordClose, type TradeRow } from "./trades.ts";
 
 /**
  * Closes the app never reported: a TP/SL fired by the stop registry, a liquidation, or a close sent while the app was
@@ -26,7 +26,7 @@ export async function watchOpenTrades(): Promise<number> {
 async function syncTrade(trade: TradeRow): Promise<boolean> {
   const m = await marketFor(trade.market_id);
   const openedSec = Math.floor(new Date(trade.opened_at).getTime() / 1000);
-  const rows = await deps().closes(trade.address as Address, trade.pool || m.poolAddress, openedSec - 1);
+  const rows = await deps().closes(accountOfTrade(trade) as Address, trade.pool || m.poolAddress, openedSec - 1);
   const seen = await closedTxs(trade.address);
   // one transaction can fill across several levels: one close per transaction
   const byTx = new Map<string, PositionClose[]>();

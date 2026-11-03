@@ -1,6 +1,7 @@
 import { getAddress, type Address } from "viem";
 import type { PrefsRequest, ProfileRequest, SessionUser } from "@bump/api-types";
 import { db, isUniqueViolation } from "./db/client.ts";
+import { deps } from "./deps.ts";
 import { ConflictError, InputError } from "./errors.ts";
 
 /** Addresses are stored lowercase so lookups never depend on checksum casing. */
@@ -15,6 +16,7 @@ type UserRow = {
   tz_offset_min: number;
   tutorial_done: boolean;
   guest_imported: boolean;
+  trading_account: string | null;
 };
 
 const toUser = (r: UserRow): SessionUser => ({
@@ -25,6 +27,7 @@ const toUser = (r: UserRow): SessionUser => ({
   showOnLeaderboard: r.show_on_leaderboard,
   tutorialDone: r.tutorial_done,
   guestImported: r.guest_imported,
+  tradingAccount: r.trading_account ? getAddress(r.trading_account) : null,
 });
 
 export async function upsertUser(input: { address: Address; privyUserId?: string | null; walletKind?: string; email?: string | null }): Promise<SessionUser> {
@@ -43,6 +46,33 @@ export async function upsertUser(input: { address: Address; privyUserId?: string
 export async function getUser(address: Address): Promise<SessionUser | null> {
   const [row] = await (await db()).query<UserRow>("select * from users where address = $1", [key(address)]);
   return row ? toUser(row) : null;
+}
+
+/** The address whose balance and positions this player trades: their dreamDEX smart account when linked, else their wallet. */
+export async function accountOf(address: Address): Promise<Address> {
+  const [row] = await (await db()).query<{ trading_account: string | null }>("select trading_account from users where address = $1", [key(address)]);
+  return getAddress(row?.trading_account ?? address);
+}
+
+/**
+ * Links (or, with null, unlinks) the dreamDEX smart account `address` trades through. The account has to be a Safe the
+ * sign-in wallet owns outright and can act for alone: that is what lets the wallet send the account's transactions
+ * without anyone else signing. Not an open trade's account, so a player must close first.
+ */
+export async function setTradingAccount(address: Address, account: string | null): Promise<SessionUser> {
+  const d = await db();
+  if ((await d.query("select 1 from trades where address = $1 and closed_at is null", [key(address)])).length) throw new ConflictError("Close your open trade before switching accounts.");
+  let linked: string | null = null;
+  if (account !== null) {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(account)) throw new InputError("That is not a wallet address.");
+    const safe = await deps().safeOwners(getAddress(account));
+    if (!safe) throw new InputError("That address is not a dreamDEX smart account on Hideki.");
+    if (!safe.owners.some((o) => o.toLowerCase() === key(address))) throw new InputError("Your bump wallet is not an owner of that account yet. Add it as an owner in dreamDEX first.");
+    if (safe.threshold !== 1) throw new InputError("That account needs more than one signature, which bump can't send on its own.");
+    linked = key(account);
+  }
+  const [row] = await d.query<UserRow>("update users set trading_account = $2, last_seen_at = now() where address = $1 returning *", [key(address), linked]);
+  return toUser(row as UserRow);
 }
 
 export async function tzOffset(address: Address): Promise<number> {

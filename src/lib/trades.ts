@@ -7,7 +7,7 @@ import { db, isUniqueViolation } from "./db/client.ts";
 import { deps, type TxReceipt } from "./deps.ts";
 import { env } from "./env.ts";
 import { ConflictError, InputError, NotFoundError, UnavailableError } from "./errors.ts";
-import { key } from "./users.ts";
+import { accountOf, key } from "./users.ts";
 
 export type TradeRow = {
   id: string;
@@ -32,7 +32,12 @@ export type TradeRow = {
   reason: CloseReason | null;
   closed_at: Date | string | null;
   close_tx: string | null;
+  /** The dreamDEX account the trade lives on; null for a trade on the player's own wallet (and for older rows). */
+  account: string | null;
 };
+
+/** Whose positions to read for a trade: its smart account when it has one, else the player's wallet. */
+export const accountOfTrade = (t: Pick<TradeRow, "address" | "account">) => t.account ?? t.address;
 
 const ms = (v: Date | string) => new Date(v).getTime();
 
@@ -87,6 +92,7 @@ export async function openTrade(address: Address, input: OpenTradeInput): Promis
   if ((await d.query("select 1 from trades where open_tx = $1", [txHash])).length) throw new ConflictError("That transaction is already logged.");
   if ((await d.query("select 1 from trades where address = $1 and closed_at is null", [key(address)])).length) throw new ConflictError("Close your open trade first.");
   const m = await marketFor(input.marketId);
+  const account = await accountOf(address);
 
   let entry = input.entry;
   let entryRaw = 0n;
@@ -95,7 +101,7 @@ export async function openTrade(address: Address, input: OpenTradeInput): Promis
     // the fills are the truth: what the player got, at what price, whatever the app thought it sent
     const receipt = await minedReceipt(txHash);
     if (receipt.from.toLowerCase() !== key(address)) throw new InputError("That transaction was not sent from your wallet.");
-    const fills = ownFills(receipt.logs, m.poolAddress, address);
+    const fills = ownFills(receipt.logs, m.poolAddress, account);
     if (!fills || fills.isBid !== (input.side === "long")) throw new InputError(`That transaction did not open a ${input.side} on ${input.marketId.toUpperCase()}.`);
     entryRaw = averagePrice(fills);
     sizeRaw = fills.quantity;
@@ -105,9 +111,9 @@ export async function openTrade(address: Address, input: OpenTradeInput): Promis
 
   try {
     const [row] = await d.query<TradeRow>(
-      `insert into trades (id, address, source, market_id, pool, side, margin, leverage, target_pct, stop_pct, entry, entry_raw, size_raw, opened_at, open_tx)
-       values ($1, $2, 'chain', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *`,
-      [randomUUID(), key(address), input.marketId, m.poolAddress.toLowerCase(), input.side, input.margin, input.leverage, input.targetPct, input.stopPct, entry, entryRaw.toString(), sizeRaw.toString(), new Date(deps().nowMs()).toISOString(), txHash],
+      `insert into trades (id, address, source, market_id, pool, side, margin, leverage, target_pct, stop_pct, entry, entry_raw, size_raw, opened_at, open_tx, account)
+       values ($1, $2, 'chain', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning *`,
+      [randomUUID(), key(address), input.marketId, m.poolAddress.toLowerCase(), input.side, input.margin, input.leverage, input.targetPct, input.stopPct, entry, entryRaw.toString(), sizeRaw.toString(), new Date(deps().nowMs()).toISOString(), txHash, key(account) === key(address) ? null : key(account)],
     );
     return toTrade(row as TradeRow);
   } catch (error) {
@@ -169,7 +175,7 @@ export async function closeTrade(address: Address, id: string, input: CloseTrade
 
   const m = await marketFor(trade.market_id);
   const receipt = await minedReceipt(txHash);
-  const fills = ownFills(receipt.logs, trade.pool || m.poolAddress, address);
+  const fills = ownFills(receipt.logs, trade.pool || m.poolAddress, accountOfTrade(trade) as Address);
   if (!fills || fills.isBid !== (trade.side === "short")) throw new InputError("That transaction did not close this trade.");
   const remaining = BigInt(trade.size_raw) - BigInt(trade.closed_raw);
   const qtyRaw = fills.quantity < remaining ? fills.quantity : remaining;

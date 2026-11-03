@@ -84,4 +84,14 @@ create table push_subscriptions (
 )
 `,
   },
+  {
+    // A player can trade through their dreamDEX smart account instead of their sign-in wallet: the account holds the
+    // balance and the positions, the sign-in wallet signs and pays gas. A trade remembers which account it was opened on.
+    id: "002_trading_account",
+    sql: `
+alter table users add column trading_account text;
+
+alter table trades add column account text
+`,
+  },
 ];

@@ -21,6 +21,7 @@ let app: ReturnType<typeof createApp>;
 let chain: FakeChain;
 let pushed: { target: PushTarget; message: PushMessage }[];
 let goneEndpoints: Set<string>;
+const safes = new Map<string, { owners: Address[]; threshold: number }>();
 let alice: Client;
 let bob: Client;
 let carol: Client;
@@ -44,6 +45,7 @@ beforeAll(async () => {
     markets: async () => ({ btc: MARKETS.btc, eth: MARKETS.eth }),
     closes: async (account, p, fromSec) => (chain.closes.get(`${account.toLowerCase()}:${p.toLowerCase()}`) ?? []).filter((c) => c.timestamp >= BigInt(fromSec)),
     sttBalance: async (address) => chain.balances.get(address.toLowerCase()) ?? 0n,
+    safeOwners: async (account) => safes.get(account.toLowerCase()) ?? null,
     sendStt: async (to, amount) => {
       chain.sent.push({ to, amount });
       return chain.tx(to);
@@ -266,5 +268,51 @@ describe("gas drip", () => {
     setDeps({ faucetConfigured: () => false });
     expect((await alice.post("/api/gas/drip")).status).toBe(503);
     setDeps({ faucetConfigured: () => true });
+  });
+});
+
+describe("trading through a dreamDEX smart account", () => {
+  const SAFE = "0x00000000000000000000000000000000000a11ce" as Address;
+  const OTHER_SAFE = "0x00000000000000000000000000000000000b0b00" as Address;
+  let dave: Client;
+
+  it("links only a threshold-1 smart account the wallet owns", async () => {
+    dave = await new Client(app, DEV_KEYS[3]).login();
+    expect((await dave.post("/api/me/account", { account: "nope" })).status).toBe(400);
+    expect((await dave.post("/api/me/account", { account: SAFE })).body.error).toMatch(/not a dreamDEX smart account/);
+    safes.set(OTHER_SAFE.toLowerCase(), { owners: [alice.address], threshold: 1 });
+    expect((await dave.post("/api/me/account", { account: OTHER_SAFE })).body.error).toMatch(/not an owner/);
+    safes.set(SAFE.toLowerCase(), { owners: [dave.address], threshold: 2 });
+    expect((await dave.post("/api/me/account", { account: SAFE })).body.error).toMatch(/more than one signature/);
+    safes.set(SAFE.toLowerCase(), { owners: [alice.address, dave.address], threshold: 1 });
+    const linked = await dave.post("/api/me/account", { account: SAFE });
+    expect(linked.status).toBe(200);
+    expect(linked.body.user.tradingAccount?.toLowerCase()).toBe(SAFE);
+    expect((await dave.get("/api/session")).body.user.tradingAccount?.toLowerCase()).toBe(SAFE);
+  });
+
+  it("verifies fills on the account while the wallet is the sender, and the watcher follows the account", async () => {
+    // fills owned by the wallet itself do not count once an account is linked
+    const own = chain.order(dave.address, { pool, isBid: true, fills: [{ quantity: 100_000n, price: usd(68_000) }] });
+    expect((await dave.post("/api/trades", { ...draft, txHash: own })).body.error).toMatch(/did not open a long/);
+    const viaAccount = chain.order(dave.address, { owner: SAFE, pool, isBid: true, fills: [{ quantity: 100_000n, price: usd(68_000) }] });
+    const opened = await dave.post("/api/trades", { ...draft, txHash: viaAccount });
+    expect(opened.status).toBe(200);
+    // someone else sending the account's transaction is refused
+    expect((await dave.post("/api/trades", { ...draft, txHash: chain.order(bob.address, { owner: SAFE, pool, isBid: true, fills: [{ quantity: 1n, price: usd(1) }] }) })).status).toBeGreaterThanOrEqual(400);
+    // switching accounts mid-trade is refused
+    expect((await dave.post("/api/me/account", { account: null })).status).toBe(409);
+    // the stop registry closes the ACCOUNT's position
+    chain.indexClose(SAFE, pool, { txHash: chain.order(REGISTRY, { owner: SAFE, pool, isBid: false, fills: [{ quantity: 100_000n, price: usd(68_680) }] }), timestamp: BigInt(Math.floor(Date.now() / 1000) + 5), closedSize: 100_000n, realizedPnl: usd(68), exitPrice: usd(68_680), orderId: 77n } as never);
+    expect(await watchOpenTrades()).toBe(1);
+    const { body } = await dave.get("/api/trades");
+    expect(body.open).toBeNull();
+    expect(body.history[0]).toMatchObject({ reason: "target" });
+  });
+
+  it("goes back to the sign-in wallet", async () => {
+    const back = await dave.post("/api/me/account", { account: null });
+    expect(back.status).toBe(200);
+    expect(back.body.user.tradingAccount).toBeNull();
   });
 });

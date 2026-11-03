@@ -16,7 +16,7 @@ import { progressFor } from "./lib/progress.ts";
 import { subscribe, unsubscribe } from "./lib/push.ts";
 import { clearedSessionCookie, getSession, requireSession, sessionCookie, type Session } from "./lib/session.ts";
 import { closeTrade, importGuest, listTrades, openTrade, updateLimits } from "./lib/trades.ts";
-import { getUser, savePrefs, saveProfile, upsertUser } from "./lib/users.ts";
+import { getUser, savePrefs, saveProfile, setTradingAccount, upsertUser } from "./lib/users.ts";
 
 type Ctx = { request: Request; params: Record<string, string>; body: unknown; query: Record<string, string | undefined> };
 type Input = { params: Record<string, string>; body: unknown; query: Record<string, string | undefined>; request: Request };
@@ -115,6 +115,11 @@ export function createApp() {
       // Player -----------------------------------------------------------------------------------------------------------
       .post("/api/me/profile", authed(async ({ session, body }) => ({ user: await saveProfile(session.address, parse(profileInputSchema, body)) })))
       .post("/api/me/prefs", authed(async ({ session, body }) => ({ user: await savePrefs(session.address, body as PrefsRequest) })))
+      .post("/api/me/account", authed(async ({ session, body }) => {
+        const account = (body as { account?: unknown } | null)?.account;
+        if (account !== null && typeof account !== "string") throw new InputError("account must be an address or null.");
+        return { user: await setTradingAccount(session.address, account) };
+      }))
       .get("/api/me/progress", authed(async ({ session }) => progressFor(session.address)))
       .post("/api/me/import", authed(async ({ session, body }) => {
         const imported = await importGuest(session.address, parse(guestImportSchema, body));

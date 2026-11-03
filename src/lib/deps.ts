@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, defineChain, http, type Address, type Hex, type PublicClient } from "viem";
+import { createPublicClient, createWalletClient, defineChain, http, parseAbi, type Address, type Hex, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import webpush from "web-push";
 import type { PushMessage } from "@bump/api-types";
@@ -25,6 +25,8 @@ export type Deps = {
   /** Position updates that realized PnL for `account` on `pool` since `fromSec`, from the indexer. */
   closes: (account: Address, pool: string, fromSec: number) => Promise<PositionClose[]>;
   sttBalance: (address: Address) => Promise<bigint>;
+  /** Owners and signature threshold of a Safe-style smart account, or null when the address is not one on Hideki. */
+  safeOwners: (account: Address) => Promise<{ owners: Address[]; threshold: number } | null>;
   /** Sends STT from the faucet key. Throws UnavailableError when FAUCET_PRIVATE_KEY is not set. */
   sendStt: (to: Address, amount: bigint) => Promise<Hex>;
   faucetConfigured: () => boolean;
@@ -33,6 +35,8 @@ export type Deps = {
   pushConfigured: () => boolean;
   nowMs: () => number;
 };
+
+const safeAbi = parseAbi(["function getOwners() view returns (address[])", "function getThreshold() view returns (uint256)"]);
 
 let publicClient: PublicClient | undefined;
 let reader: Reader | undefined;
@@ -64,6 +68,18 @@ const live: Deps = {
   markets: () => indexer().markets(),
   closes: (account, pool, fromSec) => indexer().closes(account, pool, fromSec),
   sttBalance: (address) => client().getBalance({ address }),
+  safeOwners: async (account) => {
+    try {
+      const [owners, threshold] = await Promise.all([
+        client().readContract({ address: account, abi: safeAbi, functionName: "getOwners" }),
+        client().readContract({ address: account, abi: safeAbi, functionName: "getThreshold" }),
+      ]);
+      return { owners: [...owners], threshold: Number(threshold) };
+    } catch {
+      // an EOA, or a contract that is not a Safe: both read as "not a smart account"
+      return null;
+    }
+  },
   sendStt: async (to, amount) => {
     const key = env().faucetKey;
     if (!key) throw new UnavailableError("The STT faucet is not set up on this server.");
